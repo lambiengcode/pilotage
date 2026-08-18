@@ -1,0 +1,224 @@
+# Startup / SaaS market signals.
+#
+# The only pack that regularly needs rungs 2 and 3: pricing lives in markup that has
+# no schema, and half of it is behind a "Contact us". Selectors run first and the
+# model only sees what they could not reach.
+
+name = "saas"
+description = "Market, product and traction signals for a SaaS company"
+# A bare hostname cannot be expressed with `{var}` segments — `{host}` alone would
+# also swallow single-word targets meant for other packs — so this uses the raw
+# regex escape hatch to require at least one dot.
+detect = [
+  "saas:{host}",
+  're:^(?P<host>[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)$',
+]
+tolerance = 0.05
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "home"
+kind = "html"
+url = "https://{host}/"
+ttl = "1d"
+weight = 3.0
+[source.select.title]
+css = "title"
+[source.select.meta_description]
+css = 'meta[name="description"]'
+attr = "content"
+[source.select.og_description]
+css = 'meta[property="og:description"]'
+attr = "content"
+[source.select.h1]
+css = "h1"
+[source.select.nav_links]
+css = "nav a"
+all = true
+
+[[source]]
+id = "pricing"
+kind = "html"
+url = "https://{host}/pricing"
+ttl = "1d"
+weight = 2.5
+optional = true
+[source.select.price_texts]
+css = "[class*='price'], [class*='Price'], [class*='amount'], [class*='cost']"
+all = true
+regex = '\$\s?[0-9][0-9,.]*'
+[source.select.plan_names]
+css = "h2, h3"
+all = true
+# Rung 3 runs only for the fields selectors cannot reach: whether a free tier exists,
+# what the billing model is, and the real entry price when it is rendered in pieces.
+[source.extract]
+model = "flash"
+max_chars = 12000
+fields = [
+  "pricing_model",
+  "lowest_paid_price_usd",
+  "has_free_tier",
+  "billing_period",
+  "enterprise_tier",
+]
+prompt = "Extract the pricing structure of this SaaS pricing page. lowest_paid_price_usd is the cheapest non-free monthly price in USD as a number, or null if every paid tier is quote-only."
+
+[[source]]
+id = "hn"
+kind = "api"
+url = "https://hn.algolia.com/api/v1/search?query={host}&tags=story&hitsPerPage=50"
+ttl = "6h"
+weight = 2.0
+optional = true
+[source.map]
+# `nbHits` rather than the hits array: fifty full stories stored in every run
+# payload is a lot of bytes for one number.
+hn_total = ".nbHits"
+hn_points = ".hits[].points"
+hn_titles = ".hits[].title"
+
+[[source]]
+id = "careers"
+kind = "html"
+url = "https://{host}/careers"
+ttl = "1d"
+depth = "deep"
+weight = 1.5
+optional = true
+[source.select.job_titles]
+css = "a, li"
+all = true
+regex = '(?i)(engineer|designer|developer|scientist|manager|sales|marketing|support)'
+
+[[source]]
+id = "docs"
+kind = "html"
+url = "https://docs.{host}/"
+ttl = "1d"
+depth = "deep"
+weight = 1.5
+optional = true
+[source.select.doc_title]
+css = "title"
+
+[[source]]
+id = "status"
+kind = "html"
+url = "https://status.{host}/"
+ttl = "1h"
+depth = "deep"
+weight = 1.0
+optional = true
+[source.select.status_title]
+css = "title"
+
+# Client-rendered marketing sites return an empty shell over plain HTTP. This source
+# runs the page through `chrome-devtools-axi` and reads the rendered snapshot, so the
+# selectors above having found nothing is not mistaken for the product not existing.
+[[source]]
+id = "app_shell"
+kind = "browser"
+url = "https://{host}/"
+ttl = "1d"
+depth = "deep"
+weight = 1.0
+optional = true
+[source.select.signup_cta]
+regex = '(?i)(start free|get started|sign up|try free|book a demo|request a demo)'
+[source.select.rendered_headline]
+regex = '(?im)^\s*heading\s+.*$'
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+[[metric]]
+id = "homepage"
+fact = "title"
+fail = "is none"
+critical = true
+weight = 3.0
+label = "homepage reachable"
+
+[[metric]]
+id = "pricing_public"
+fact = "price_texts"
+agg = "count"
+warn = "< 1"
+weight = 2.5
+label = "public prices on /pricing"
+
+[[metric]]
+id = "hn_mentions"
+fact = "hn_total"
+warn = "< 3"
+fail = "< 1"
+weight = 2.0
+label = "Hacker News stories"
+
+[[metric]]
+id = "hn_peak_points"
+fact = "hn_points"
+agg = "max"
+warn = "< 50"
+weight = 1.5
+label = "best HN story"
+
+[[metric]]
+id = "hiring"
+fact = "job_titles"
+agg = "count"
+warn = "< 1"
+weight = 1.5
+label = "open roles listed"
+
+[[metric]]
+id = "docs_public"
+fact = "doc_title"
+warn = "is none"
+weight = 1.5
+label = "public documentation"
+
+[[metric]]
+id = "positioning"
+fact = "meta_description"
+warn = "is none"
+weight = 1.0
+label = "stated positioning"
+
+[[metric]]
+id = "pricing_model"
+fact = "pricing_model"
+warn = "is none"
+weight = 1.0
+
+[[metric]]
+id = "lowest_price"
+fact = "lowest_paid_price_usd"
+warn = "is none"
+weight = 1.0
+unit = "usd"
+label = "entry price"
+
+[[metric]]
+id = "free_tier"
+fact = "has_free_tier"
+warn = "== 0"
+weight = 1.0
+
+[[metric]]
+id = "status_page"
+fact = "status_title"
+warn = "is none"
+weight = 1.0
+
+[[metric]]
+id = "signup_cta"
+fact = "signup_cta"
+warn = "is none"
+weight = 1.0
+label = "self-serve signup"

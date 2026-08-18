@@ -1,0 +1,57 @@
+name = "npm"
+description = "npm package health"
+detect = ["npmjs.com/package/{pkg}", "npm:{pkg}"]
+
+[[source]]
+id = "registry"
+kind = "api"
+url = "https://registry.npmjs.org/{pkg}"
+ttl = "6h"
+weight = 3.0
+[source.map]
+latest = ".dist-tags.latest"
+license = ".license"
+maintainers = ".maintainers"
+modified = ".time.modified"
+created = ".time.created"
+
+[[source]]
+id = "downloads"
+kind = "api"
+url = "https://api.npmjs.org/downloads/point/last-week/{pkg}"
+ttl = "6h"
+weight = 2.0
+optional = true
+[source.map]
+weekly_downloads = ".downloads"
+
+[[metric]]
+id = "weekly_downloads"
+fact = "weekly_downloads"
+warn = "< 1000"
+fail = "< 100"
+weight = 3.0
+label = "downloads (7d)"
+
+[[metric]]
+id = "days_since_publish"
+fact = "modified"
+agg = "days_since"
+warn = "> 365"
+fail = "> 1095"
+weight = 3.0
+unit = "d"
+label = "days since last publish"
+
+[[metric]]
+id = "maintainers"
+fact = "maintainers"
+agg = "count"
+warn = "< 2"
+weight = 2.0
+
+[[metric]]
+id = "license"
+fact = "license"
+fail = "is none"
+weight = 2.0

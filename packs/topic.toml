@@ -1,0 +1,275 @@
+# Any subject at all.
+#
+# The other packs are verticals: they know what a repository or a protocol is. This one
+# knows nothing about its target and works on anything you can name — a language, a
+# framework, a library, a drug, a disease, a market, a technique, a company, an idea.
+#
+#     pilotage research "topic:webassembly"
+#     pilotage research "topic:CRISPR"
+#     pilotage research "topic:retrieval augmented generation"
+#     pilotage compare "topic:rust" "topic:zig" "topic:go"
+#
+# Read the verdict as *how established and how active* a subject is, not whether it is
+# "healthy" — health is not a meaningful property of an idea. The facts are the point;
+# the score is a rough momentum summary over them.
+#
+# ONE BIG CAVEAT: this pack measures a *string*, not a concept. "Go" matches the board
+# game and the verb, so it reports 227,000 medical papers. Disambiguate anything with a
+# common word in it — "topic:Go (programming language)" drops that to 133 and the numbers
+# become meaningful. The `matched_article` metric below shows which Wikipedia article the
+# query actually landed on, so this is visible in every run rather than only in the docs.
+#
+# Every source here is free and keyless.
+
+name = "topic"
+description = "Any subject: attention, research volume, developer ecosystem, momentum"
+detect = ["topic:{q}", "t:{q}"]
+tolerance = 0.2
+
+# ---------------------------------------------------------------------------
+# Public attention
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "wikipedia"
+kind = "api"
+url = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={q_enc}&format=json&srlimit=1"
+ttl = "1d"
+weight = 2.5
+[source.map]
+wiki_total_hits = ".query.searchinfo.totalhits"
+wiki_title = ".query.search[0].title"
+wiki_snippet = ".query.search[0].snippet"
+wiki_words = ".query.search[0].wordcount"
+
+# Monthly pageviews are the closest thing to a free, universal trend line. The window
+# ends 30 days back because the current month is always partial, and a half-counted
+# final month would read as a collapse in interest.
+[[source]]
+id = "wiki_trend"
+kind = "api"
+url = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/{q_us}/monthly/{since_2y_compact}/{since_30d_compact}"
+ttl = "1d"
+weight = 2.5
+optional = true
+[source.map]
+pageviews_series = ".items[].views"
+
+[[source]]
+id = "hn_stories"
+kind = "api"
+url = "https://hn.algolia.com/api/v1/search?query={q_enc}&tags=story&hitsPerPage=1"
+ttl = "6h"
+weight = 2.0
+optional = true
+[source.map]
+hn_story_total = ".nbHits"
+
+[[source]]
+id = "hn_comments"
+kind = "api"
+url = "https://hn.algolia.com/api/v1/search?query={q_enc}&tags=comment&hitsPerPage=50"
+ttl = "6h"
+weight = 2.0
+optional = true
+[source.map]
+hn_comment_total = ".nbHits"
+hn_comment_texts = ".hits[].comment_text"
+
+# ---------------------------------------------------------------------------
+# Research volume — covers medicine, science and anything else published
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "openalex"
+kind = "api"
+url = "https://api.openalex.org/works?filter=title.search:{q_enc}&per-page=1"
+ttl = "1d"
+weight = 2.5
+optional = true
+[source.map]
+academic_works = ".meta.count"
+
+[[source]]
+id = "openalex_recent"
+kind = "api"
+url = "https://api.openalex.org/works?filter=title.search:{q_enc},from_publication_date:{since_1y}&per-page=1"
+ttl = "1d"
+weight = 2.5
+optional = true
+[source.map]
+academic_works_1y = ".meta.count"
+
+[[source]]
+id = "pubmed"
+kind = "api"
+url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={q_enc}&retmode=json&retmax=0"
+ttl = "1d"
+weight = 2.0
+optional = true
+[source.map]
+medical_papers = ".esearchresult.count"
+
+[[source]]
+id = "crossref"
+kind = "api"
+url = "https://api.crossref.org/works?query={q_enc}&rows=0"
+ttl = "1d"
+depth = "deep"
+weight = 1.5
+optional = true
+[source.map]
+crossref_works = ".message.total-results"
+
+# ---------------------------------------------------------------------------
+# Developer ecosystem
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "github_search"
+kind = "api"
+url = "https://api.github.com/search/repositories?q={q_enc}&per_page=1"
+ttl = "6h"
+weight = 2.0
+optional = true
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+[source.map]
+github_repos = ".total_count"
+
+[[source]]
+id = "stackoverflow"
+kind = "api"
+url = "https://api.stackexchange.com/2.3/tags/{q_enc}/info?site=stackoverflow"
+ttl = "1d"
+weight = 1.5
+optional = true
+[source.map]
+so_questions = ".items[0].count"
+so_tag = ".items[0].name"
+
+[[source]]
+id = "npm_search"
+kind = "api"
+url = "https://registry.npmjs.org/-/v1/search?text={q_enc}&size=1"
+ttl = "1d"
+depth = "deep"
+weight = 1.0
+optional = true
+[source.map]
+npm_packages = ".total"
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+[[metric]]
+id = "known_at_all"
+fact = "wiki_total_hits"
+fail = "is none"
+warn = "< 10"
+critical = true
+weight = 3.0
+label = "recognised subject"
+
+# The one genuine trend line available for any subject, free.
+# Always shown, so an ambiguous query is caught by reading the output rather than by
+# trusting it.
+[[metric]]
+id = "matched_article"
+fact = "wiki_title"
+warn = "is none"
+pin = true
+weight = 1.0
+label = "Wikipedia article matched — check this is your subject"
+
+[[metric]]
+id = "attention_trend_24m"
+fact = "pageviews_series"
+agg = "pct_change"
+warn = "< -30"
+fail = "< -60"
+weight = 3.0
+unit = "%"
+label = "Wikipedia attention change (24m)"
+
+[[metric]]
+id = "attention_now"
+fact = "pageviews_series"
+take = -3
+agg = "avg"
+warn = "< 3000"
+weight = 2.0
+label = "monthly pageviews (recent 3m avg)"
+
+[[metric]]
+id = "research_volume"
+fact = "academic_works"
+warn = "< 100"
+weight = 2.0
+label = "academic works"
+
+# What share of all work on this subject happened in the last year. High means the
+# field is moving; low means the literature is settled or the subject is dormant.
+[[metric]]
+id = "research_momentum"
+fact = "academic_works_1y"
+over = "academic_works"
+agg = "ratio"
+warn = "< 0.05"
+weight = 2.5
+label = "share of research published in the last year"
+
+[[metric]]
+id = "medical_literature"
+fact = "medical_papers"
+warn = "< 50"
+weight = 1.5
+label = "PubMed papers"
+
+[[metric]]
+id = "dev_ecosystem"
+fact = "github_repos"
+warn = "< 500"
+weight = 2.0
+label = "GitHub repositories"
+
+[[metric]]
+id = "practitioner_questions"
+fact = "so_questions"
+warn = "< 500"
+weight = 1.5
+label = "Stack Overflow questions"
+
+[[metric]]
+id = "hn_stories"
+fact = "hn_story_total"
+warn = "< 20"
+weight = 1.5
+label = "Hacker News stories"
+
+[[metric]]
+id = "hn_discussion"
+fact = "hn_comment_total"
+warn = "< 100"
+weight = 1.5
+label = "Hacker News comments"
+
+[[metric]]
+id = "framed_as_hype"
+fact = "hn_comment_texts"
+agg = "count"
+filter = "(?i)(hype|overhyped|snake oil|buzzword|bubble|fad)"
+warn = "> 5"
+weight = 1.0
+label = "HN comments calling it hype"
+
+[[metric]]
+id = "framed_as_production"
+fact = "hn_comment_texts"
+agg = "count"
+filter = "(?i)(in production|we use|we run|shipped|at scale|deployed)"
+warn = "< 2"
+weight = 1.5
+label = "HN comments reporting production use"

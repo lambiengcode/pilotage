@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+
+# Local cache and user packs when PILOTAGE_HOME points into the repo
+/.pilotage
+
+# Benchmark scratch
+/docs/_preview.html

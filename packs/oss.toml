@@ -1,0 +1,235 @@
+# Open-source / technical due diligence.
+#
+# Deliberately the cheapest pack to run: every source here is a documented JSON API
+# with a clean schema, so extraction never leaves rung 1 and never costs a token.
+# `GITHUB_TOKEN` is optional but lifts the rate limit from 60/h to 5000/h.
+
+name = "oss"
+description = "Repository health and technical due diligence from the GitHub REST API"
+detect = ["github.com/{owner}/{repo}", "{owner}/{repo}"]
+tolerance = 0.05
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "gh_repo"
+kind = "api"
+url = "https://api.github.com/repos/{owner}/{repo}"
+ttl = "1h"
+weight = 3.0
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+"X-GitHub-Api-Version" = "2022-11-28"
+[source.map]
+stars = ".stargazers_count"
+forks = ".forks_count"
+watchers = ".subscribers_count"
+open_issues = ".open_issues_count"
+archived = ".archived"
+disabled = ".disabled"
+is_fork = ".fork"
+license = ".license.spdx_id"
+pushed_at = ".pushed_at"
+created_at = ".created_at"
+description = ".description"
+homepage = ".homepage"
+language = ".language"
+topics = ".topics"
+
+[[source]]
+id = "gh_commits"
+kind = "api"
+# Capped at 100 by `per_page`; a repo pushing more than 100 commits in 90 days
+# saturates the count, which is fine — every threshold here sits far below the cap.
+url = "https://api.github.com/repos/{owner}/{repo}/commits?per_page=100&since={since_90d}"
+ttl = "1h"
+weight = 3.0
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+[source.map]
+commits_90d = "."
+last_commit_at = ".[0].commit.committer.date"
+commit_authors = ".[].commit.author.email"
+
+[[source]]
+id = "gh_contributors"
+kind = "api"
+url = "https://api.github.com/repos/{owner}/{repo}/contributors?per_page=100"
+ttl = "6h"
+weight = 2.0
+optional = true
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+[source.map]
+contributors = "."
+contribution_counts = ".[].contributions"
+
+[[source]]
+id = "gh_releases"
+kind = "api"
+url = "https://api.github.com/repos/{owner}/{repo}/releases?per_page=10"
+ttl = "6h"
+weight = 1.0
+optional = true
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+[source.map]
+releases = "."
+last_release_at = ".[0].published_at"
+last_release_tag = ".[0].tag_name"
+
+[[source]]
+id = "gh_community"
+kind = "api"
+url = "https://api.github.com/repos/{owner}/{repo}/community/profile"
+ttl = "1d"
+weight = 1.0
+optional = true
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+[source.map]
+health_pct = ".health_percentage"
+readme = ".files.readme.url"
+contributing = ".files.contributing.url"
+code_of_conduct = ".files.code_of_conduct.name"
+security_policy = ".files.security.url"
+issue_template = ".files.issue_template.url"
+
+[[source]]
+id = "gh_actions"
+kind = "api"
+url = "https://api.github.com/repos/{owner}/{repo}/actions/runs?per_page=20"
+ttl = "1h"
+depth = "deep"
+weight = 1.0
+optional = true
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+[source.map]
+ci_last = ".workflow_runs[0].conclusion"
+ci_conclusions = ".workflow_runs[].conclusion"
+
+[[source]]
+id = "gh_languages"
+kind = "api"
+url = "https://api.github.com/repos/{owner}/{repo}/languages"
+ttl = "1d"
+depth = "deep"
+weight = 0.5
+optional = true
+auth_env = "GITHUB_TOKEN"
+[source.headers]
+Accept = "application/vnd.github+json"
+[source.map]
+language_bytes = "."
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+[[metric]]
+id = "archived"
+fact = "archived"
+fail = "== 1"
+critical = true
+weight = 3.0
+label = "repository archived"
+
+[[metric]]
+id = "days_since_push"
+fact = "pushed_at"
+agg = "days_since"
+warn = "> 90"
+fail = "> 365"
+weight = 3.0
+unit = "d"
+label = "days since last push"
+
+[[metric]]
+id = "commits_90d"
+fact = "commits_90d"
+agg = "count"
+warn = "< 10"
+fail = "< 3"
+weight = 3.0
+label = "commits (90d)"
+
+[[metric]]
+id = "bus_factor"
+fact = "commit_authors"
+agg = "unique"
+warn = "< 3"
+fail = "< 2"
+weight = 2.5
+label = "distinct commit authors (90d)"
+
+[[metric]]
+id = "contributors"
+fact = "contributors"
+agg = "count"
+warn = "< 3"
+fail = "< 2"
+weight = 2.0
+
+[[metric]]
+id = "license"
+fact = "license"
+fail = "is none"
+weight = 2.0
+
+[[metric]]
+id = "health_pct"
+fact = "health_pct"
+warn = "< 60"
+fail = "< 30"
+weight = 1.5
+unit = "%"
+label = "community health"
+
+[[metric]]
+id = "releases"
+fact = "releases"
+agg = "count"
+warn = "< 1"
+weight = 1.0
+
+[[metric]]
+id = "days_since_release"
+fact = "last_release_at"
+agg = "days_since"
+warn = "> 365"
+weight = 1.0
+unit = "d"
+
+[[metric]]
+id = "security_policy"
+fact = "security_policy"
+warn = "is none"
+weight = 1.0
+
+[[metric]]
+id = "stars"
+fact = "stars"
+warn = "< 100"
+weight = 0.5
+
+[[metric]]
+id = "open_issues"
+fact = "open_issues"
+warn = "> 500"
+weight = 0.5
+
+[[metric]]
+id = "ci_status"
+fact = "ci_last"
+fail = '== "failure"'
+weight = 1.0
+label = "latest CI conclusion"

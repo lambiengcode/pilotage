@@ -1,0 +1,477 @@
+# AI video / avatar generation vendors.
+#
+# The comparison this pack exists to make possible is cost-per-minute-of-video, which
+# no vendor publishes directly: HeyGen sells credits, Synthesia sells minutes, D-ID
+# sells API calls. The model extracts the numbers exactly as each page writes them and
+# pilotage does the division (`agg = "ratio"`). Arithmetic belongs in the engine, not
+# in a prompt.
+#
+# Latency is deliberately NOT here. Measuring a vendor's generation time means spending
+# its credits, which must never happen during a market scan — see packs/probe.toml.
+
+name = "aivideo"
+description = "AI video and avatar generation vendors: pricing, unit economics, traction, posture"
+detect = [
+  "aivideo:{host}",
+  're:^(?P<host>heygen\.com|synthesia\.io|d-id\.com|tavus\.io|colossyan\.com|elai\.io|hourone\.ai|creatify\.ai|argil\.ai|captions\.ai)$',
+]
+tolerance = 0.05
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "home"
+kind = "html"
+url = "https://{host}/"
+ttl = "1d"
+weight = 3.0
+[source.select.title]
+css = "title"
+[source.select.positioning]
+css = 'meta[name="description"]'
+attr = "content"
+[source.select.og_description]
+css = 'meta[property="og:description"]'
+attr = "content"
+
+# Selectors first, and they do sometimes work — Tavus renders prices server-side.
+# When they find nothing, rung 3 below picks up the same page.
+[[source]]
+id = "pricing"
+kind = "html"
+url = "https://{host}/pricing"
+ttl = "1d"
+weight = 3.0
+optional = true
+[source.select.price_texts]
+css = "[class*='price'], [class*='Price'], [class*='amount'], [class*='cost'], [class*='plan']"
+all = true
+regex = '\$\s?[0-9][0-9,.]*'
+[source.extract]
+model = "flash"
+max_chars = 14000
+fields = [
+  "pricing_model",
+  "lowest_paid_price_usd",
+  "billing_period",
+  "has_free_tier",
+  "enterprise_tier",
+  "entry_plan_minutes_per_month",
+  "entry_plan_credits_per_month",
+  "minutes_per_credit",
+  "api_on_paid_plans",
+  "seats_included_entry",
+]
+prompt = """
+This is the pricing page of an AI video generation product.
+
+Definitions, to be applied literally:
+- pricing_model: one of "per-minute", "per-credit", "per-video", "per-seat", "usage", "quote-only". Use the vocabulary the page itself implies; null if unclear.
+- lowest_paid_price_usd: the cheapest non-free monthly price in USD, as a number. If only annual pricing is shown, use the stated monthly-equivalent. null if every paid tier is quote-only.
+- entry_plan_minutes_per_month: minutes of video included in that cheapest paid plan. null if the plan is not denominated in minutes.
+- entry_plan_credits_per_month: credits included in that cheapest paid plan. null if not denominated in credits.
+- minutes_per_credit: only if the page states the conversion. Do not compute or assume it.
+- seats_included_entry: seats included in the cheapest paid plan.
+- api_on_paid_plans: true only if the page says API access is included on a paid plan.
+"""
+
+[[source]]
+id = "hn"
+kind = "api"
+url = "https://hn.algolia.com/api/v1/search?query={host}&tags=story&hitsPerPage=50"
+ttl = "6h"
+weight = 2.0
+optional = true
+[source.map]
+# `nbHits` rather than the hits array: storing fifty full stories in every run
+# payload to compute a count is a lot of bytes for one number.
+hn_total = ".nbHits"
+hn_points = ".hits[].points"
+hn_titles = ".hits[].title"
+
+# Client-rendered pricing pages return a shell over plain HTTP. This runs the page
+# through chrome-devtools-axi so "the selectors found nothing" is not mistaken for
+# "this vendor publishes no prices".
+[[source]]
+id = "pricing_rendered"
+kind = "browser"
+url = "https://{host}/pricing"
+ttl = "1d"
+depth = "deep"
+weight = 2.5
+optional = true
+[source.select.rendered_prices]
+regex = '\$\s?[0-9][0-9,.]*(?:\s*/\s*(?:mo|month|yr|year|min|minute))?'
+all = true
+# Leading [1-9] excludes "$0", so `min` over this is the cheapest *paid* tier rather
+# than the free one. Doing it in the regex keeps a "smallest non-zero" special case out
+# of the engine.
+[source.select.rendered_paid_prices]
+regex = '\$\s?[1-9][0-9,.]*'
+all = true
+[source.select.rendered_free_signal]
+regex = '(?i)(\$\s?0(?:\.00)?\b|free (?:plan|tier|forever)|start (?:for )?free|try (?:it )?free)'
+[source.select.rendered_billing_unit]
+regex = '(?i)(per minute|per credit|per video|per seat|credits?|minutes? of video)'
+all = true
+
+[[source]]
+id = "api_docs"
+kind = "html"
+url = "https://docs.{host}/"
+ttl = "1d"
+depth = "deep"
+weight = 2.0
+optional = true
+[source.select.docs_title]
+css = "title"
+[source.select.docs_mentions_api]
+css = "body"
+regex = '(?i)(api key|authorization|endpoint|rest api)'
+
+[[source]]
+id = "status"
+kind = "html"
+url = "https://status.{host}/"
+ttl = "1h"
+depth = "deep"
+weight = 1.0
+optional = true
+[source.select.status_title]
+css = "title"
+
+# Public compliance posture. A trust page is weak evidence on its own, but its absence
+# is a real signal for anything a business would put customer footage through.
+[[source]]
+id = "trust"
+kind = "html"
+url = "https://{host}/security"
+ttl = "1w"
+depth = "deep"
+weight = 1.5
+optional = true
+[source.select.security_page]
+css = "title"
+[source.select.compliance_claims]
+css = "body"
+all = true
+regex = '(?i)(SOC ?2|ISO ?27001|GDPR|HIPAA)'
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+[[metric]]
+id = "homepage"
+fact = "title"
+fail = "is none"
+critical = true
+weight = 3.0
+label = "homepage reachable"
+
+[[metric]]
+id = "pricing_public"
+fact = "price_texts"
+agg = "count"
+warn = "< 1"
+weight = 2.0
+label = "prices in static HTML"
+
+[[metric]]
+id = "pricing_rendered"
+fact = "rendered_prices"
+agg = "count"
+warn = "< 1"
+weight = 2.0
+label = "prices after rendering"
+
+# Deterministic pricing, no model required. Rendering the page and reading the numbers
+# off it gets the entry price, the free tier and the billing unit — which is most of
+# what a buyer wants and all of it free.
+[[metric]]
+id = "rendered_entry_price"
+fact = "rendered_paid_prices"
+agg = "min"
+warn = "is none"
+weight = 2.5
+unit = "usd"
+label = "cheapest paid price (rendered)"
+
+[[metric]]
+id = "rendered_top_price"
+fact = "rendered_paid_prices"
+agg = "max"
+warn = "is none"
+weight = 1.0
+unit = "usd"
+label = "highest listed price (rendered)"
+
+[[metric]]
+id = "rendered_free_tier"
+fact = "rendered_free_signal"
+warn = "is none"
+weight = 1.5
+label = "free tier visible on the page"
+
+[[metric]]
+id = "billing_unit"
+fact = "rendered_billing_unit"
+agg = "first"
+warn = "is none"
+weight = 2.0
+label = "unit it is sold in"
+
+[[metric]]
+id = "pricing_model"
+fact = "pricing_model"
+warn = "is none"
+fail = '== "quote-only"'
+weight = 2.5
+label = "how it is billed"
+
+[[metric]]
+id = "entry_price"
+fact = "lowest_paid_price_usd"
+warn = "is none"
+weight = 2.5
+unit = "usd"
+label = "cheapest paid plan"
+
+# The number that makes vendors comparable at all.
+[[metric]]
+id = "cost_per_minute"
+fact = "lowest_paid_price_usd"
+over = "entry_plan_minutes_per_month"
+agg = "ratio"
+warn = "> 2"
+fail = "> 5"
+weight = 3.0
+unit = "usd"
+label = "$ per minute of video (entry plan)"
+
+[[metric]]
+id = "cost_per_credit"
+fact = "lowest_paid_price_usd"
+over = "entry_plan_credits_per_month"
+agg = "ratio"
+warn = "> 1"
+weight = 1.5
+unit = "usd"
+label = "$ per credit (entry plan)"
+
+[[metric]]
+id = "free_tier"
+fact = "has_free_tier"
+warn = "== 0"
+weight = 1.5
+
+[[metric]]
+id = "api_access"
+fact = "api_on_paid_plans"
+warn = "== 0"
+weight = 2.0
+label = "API on paid plans"
+
+[[metric]]
+id = "docs_public"
+fact = "docs_title"
+warn = "is none"
+weight = 2.0
+
+[[metric]]
+id = "docs_api_shaped"
+fact = "docs_mentions_api"
+warn = "is none"
+weight = 1.5
+label = "docs describe an API"
+
+[[metric]]
+id = "compliance_claims"
+fact = "compliance_claims"
+agg = "unique"
+warn = "< 1"
+weight = 1.5
+label = "SOC2/ISO/GDPR/HIPAA mentions"
+
+[[metric]]
+id = "status_page"
+fact = "status_title"
+warn = "is none"
+weight = 1.0
+
+[[metric]]
+id = "hn_mentions"
+fact = "hn_total"
+warn = "< 3"
+weight = 1.5
+label = "Hacker News stories"
+
+[[metric]]
+id = "hn_peak_points"
+fact = "hn_points"
+agg = "max"
+warn = "< 50"
+weight = 1.5
+label = "best HN story"
+
+[[metric]]
+id = "positioning"
+fact = "positioning"
+warn = "is none"
+weight = 1.0
+label = "stated positioning"
+
+# ---------------------------------------------------------------------------
+# Public user feedback and operational history
+#
+# All of this is already on the internet and none of it needs a vendor key. The
+# keyword counts below are exactly that — counts of comments matching a pattern, not
+# sentiment analysis. They are pointers to evidence you can go read, which is why they
+# carry low weight and why `source get` will hand you the raw text.
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "hn_comments"
+kind = "api"
+# `{brand}` not `{host}`: people write "heygen", not "heygen.com". On this corpus that
+# is the difference between 2856 comments and 6.
+url = "https://hn.algolia.com/api/v1/search?query={brand_enc}&tags=comment&hitsPerPage=50"
+ttl = "6h"
+weight = 2.5
+optional = true
+[source.map]
+hn_comment_total = ".nbHits"
+hn_comment_texts = ".hits[].comment_text"
+
+[[source]]
+id = "appstore"
+kind = "api"
+url = "https://itunes.apple.com/search?term={brand_enc}&entity=software&limit=1"
+ttl = "1d"
+weight = 2.0
+optional = true
+[source.map]
+app_name = ".results[0].trackName"
+app_rating = ".results[0].averageUserRating"
+app_rating_count = ".results[0].userRatingCount"
+
+# statuspage.io exposes a documented JSON API that every vendor here happens to use.
+# It is the closest thing to published latency evidence that exists without a key.
+[[source]]
+id = "status_api"
+kind = "api"
+url = "https://status.{host}/api/v2/summary.json"
+ttl = "1h"
+weight = 2.0
+optional = true
+[source.map]
+status_description = ".status.description"
+status_indicator = ".status.indicator"
+status_components = ".components[].name"
+open_incidents = ".incidents[].name"
+
+[[source]]
+id = "incidents"
+kind = "api"
+url = "https://status.{host}/api/v2/incidents.json"
+ttl = "6h"
+weight = 2.5
+optional = true
+[source.map]
+incident_names = ".incidents[].name"
+incident_impacts = ".incidents[].impact"
+incident_dates = ".incidents[].created_at"
+
+[[metric]]
+id = "app_rating"
+fact = "app_rating"
+warn = "< 4.2"
+fail = "< 3.5"
+weight = 2.5
+label = "App Store rating"
+
+[[metric]]
+id = "app_rating_count"
+fact = "app_rating_count"
+warn = "< 200"
+weight = 1.5
+label = "App Store ratings"
+
+# Low weight on purpose. A brand whose name tokenises to a common word gets a wildly
+# inflated count — "d-id" matches "did". Treat this as a pointer to `source get
+# hn_comments`, not as a measurement. The filtered counts below are more trustworthy
+# because they require a topical keyword as well as the brand.
+[[metric]]
+id = "hn_discussion"
+fact = "hn_comment_total"
+warn = "< 50"
+weight = 1.0
+label = "HN comments matching the brand (noisy)"
+
+[[metric]]
+id = "incidents_recorded"
+fact = "incident_names"
+agg = "count"
+warn = "> 25"
+weight = 1.5
+label = "incidents on record"
+
+# The honest answer to "how fast is it": the vendor's own log of when it was slow.
+[[metric]]
+id = "latency_incidents"
+fact = "incident_names"
+agg = "count"
+filter = "(?i)(latency|slow|delay|degrad|queue|backlog|timeout|capacity)"
+warn = "> 3"
+fail = "> 8"
+weight = 3.0
+label = "latency/degradation incidents"
+
+[[metric]]
+id = "major_incidents"
+fact = "incident_impacts"
+agg = "count"
+filter = "(?i)(major|critical)"
+warn = "> 1"
+fail = "> 4"
+weight = 2.0
+label = "major-impact incidents"
+
+# Reads the description, not the indicator: the indicator's healthy value is literally
+# the string "none", which is indistinguishable from missing data in the output.
+[[metric]]
+id = "current_status"
+fact = "status_description"
+fail = "is none"
+weight = 2.0
+pin = true
+label = "status page says"
+
+[[metric]]
+id = "talk_about_price"
+fact = "hn_comment_texts"
+agg = "count"
+filter = "(?i)(expensive|overpriced|pricey|cost too|too expensive|\\$[0-9]+ ?/ ?(mo|month))"
+warn = "> 4"
+weight = 1.0
+label = "HN comments raising price"
+
+[[metric]]
+id = "talk_about_quality"
+fact = "hn_comment_texts"
+agg = "count"
+filter = "(?i)(uncanny|creepy|robotic|artifact|glitch|poor quality|bad quality|lip.?sync)"
+warn = "> 4"
+weight = 1.0
+label = "HN comments raising output quality"
+
+[[metric]]
+id = "talk_about_speed"
+fact = "hn_comment_texts"
+agg = "count"
+filter = "(?i)(slow|took (a|an|[0-9]+) (while|hour|minute)|render time|generation time|fast)"
+weight = 1.0
+warn = "> 6"
+label = "HN comments raising speed"

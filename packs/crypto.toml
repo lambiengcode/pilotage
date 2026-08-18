@@ -1,0 +1,233 @@
+# Crypto / Web3 protocol health.
+#
+# DefiLlama and CoinGecko both key protocols by slug, and the two slugs frequently
+# disagree ("aave" vs "aave-v3"). CoinGecko is therefore `optional` — a miss degrades
+# the run and is reported, rather than failing it.
+
+name = "crypto"
+description = "Protocol and token health from DefiLlama and CoinGecko"
+detect = [
+  "defillama.com/protocol/{slug}",
+  "coingecko.com/en/coins/{slug}",
+  "crypto:{slug}",
+]
+# Two independent price/TVL feeds legitimately differ by a few percent; only a wider
+# gap than this is worth reporting as a contradiction.
+tolerance = 0.10
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "llama_tvl"
+kind = "api"
+url = "https://api.llama.fi/tvl/{slug}"
+ttl = "5m"
+weight = 3.0
+[source.map]
+tvl = "."
+
+[[source]]
+id = "llama_protocol"
+kind = "api"
+url = "https://api.llama.fi/protocol/{slug}"
+ttl = "30m"
+weight = 3.0
+# `/protocol/{slug}` returns the full TVL history — several megabytes for a large
+# protocol. That is the cost of the only endpoint carrying both the series and the
+# metadata; the 30m TTL means it is paid once.
+[source.map]
+name = ".name"
+category = ".category"
+# Parent protocols report an empty top-level `chains` and carry the real chain list
+# only as the keys of `currentChainTvls`.
+chains = ".currentChainTvls{}"
+audits = ".audits"
+audit_links = ".audit_links"
+audit_note = ".audit_note"
+github = ".github"
+twitter = ".twitter"
+site = ".url"
+listed_at = ".listedAt"
+tvl_series = ".tvl[].totalLiquidityUSD"
+# Same key as CoinGecko's market cap on purpose: two independent feeds for one
+# number is exactly the case contradiction detection exists for.
+market_cap = ".mcap"
+hacks = ".hacks"
+raises = ".raises"
+symbol = ".symbol"
+
+[[source]]
+id = "coingecko"
+kind = "api"
+url = "https://api.coingecko.com/api/v3/coins/{slug}?localization=false&tickers=false&market_data=true&community_data=true&developer_data=true&sparkline=false"
+ttl = "15m"
+weight = 2.0
+optional = true
+auth_env = "COINGECKO_API_KEY"
+auth_header = "x-cg-demo-api-key"
+auth_format = "{}"
+[source.map]
+price_usd = ".market_data.current_price.usd"
+market_cap = ".market_data.market_cap.usd"
+volume_24h = ".market_data.total_volume.usd"
+price_change_30d = ".market_data.price_change_percentage_30d"
+ath_change = ".market_data.ath_change_percentage.usd"
+dev_commits_4w = ".developer_data.commit_count_4_weeks"
+dev_stars = ".developer_data.stars"
+dev_forks = ".developer_data.forks"
+twitter_followers = ".community_data.twitter_followers"
+categories = ".categories"
+
+[[source]]
+id = "llama_fees"
+kind = "api"
+url = "https://api.llama.fi/summary/fees/{slug}?dataType=dailyFees"
+ttl = "1h"
+depth = "deep"
+weight = 1.5
+optional = true
+[source.map]
+fees_24h = ".total24h"
+fees_30d = ".total30d"
+fees_change_1d = ".change_1d"
+
+[[source]]
+id = "llama_chains"
+kind = "api"
+url = "https://api.llama.fi/v2/chains"
+ttl = "1h"
+depth = "deep"
+weight = 0.5
+optional = true
+[source.map]
+all_chain_tvls = ".[].tvl"
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+[[metric]]
+id = "tvl"
+fact = "tvl"
+warn = "< 5000000"
+fail = "< 500000"
+weight = 3.0
+unit = "usd"
+label = "total value locked"
+
+[[metric]]
+id = "tvl_30d_change"
+fact = "tvl_series"
+take = -30
+agg = "pct_change"
+warn = "< -25"
+fail = "< -50"
+weight = 3.0
+unit = "%"
+label = "TVL change (30d)"
+
+# A past exploit is the single strongest risk signal DefiLlama publishes, and it is
+# not something a healthy TVL offsets.
+[[metric]]
+id = "hacks"
+fact = "hacks"
+agg = "count"
+warn = "> 0"
+fail = "> 1"
+weight = 3.0
+label = "recorded exploits"
+
+# Absent audit data is common for parent protocols, so this warns rather than fails —
+# "nobody published an audit field" is weaker evidence than "the audit count is zero".
+[[metric]]
+id = "audits"
+fact = "audits"
+warn = "is none"
+fail = "== 0"
+weight = 2.5
+label = "audit count"
+
+[[metric]]
+id = "funding_rounds"
+fact = "raises"
+agg = "count"
+warn = "< 1"
+weight = 0.5
+
+[[metric]]
+id = "audit_links"
+fact = "audit_links"
+agg = "count"
+warn = "< 1"
+weight = 1.5
+label = "published audit reports"
+
+[[metric]]
+id = "dev_commits_4w"
+fact = "dev_commits_4w"
+warn = "< 5"
+fail = "< 1"
+weight = 2.0
+label = "commits (4w)"
+
+[[metric]]
+id = "price_change_30d"
+fact = "price_change_30d"
+warn = "< -30"
+fail = "< -60"
+weight = 1.5
+unit = "%"
+
+[[metric]]
+id = "market_cap"
+fact = "market_cap"
+warn = "< 10000000"
+weight = 1.5
+unit = "usd"
+
+[[metric]]
+id = "volume_24h"
+fact = "volume_24h"
+warn = "< 100000"
+weight = 1.5
+unit = "usd"
+
+[[metric]]
+id = "fees_30d"
+fact = "fees_30d"
+warn = "< 10000"
+weight = 1.5
+unit = "usd"
+
+[[metric]]
+id = "chains"
+fact = "chains"
+agg = "count"
+warn = "< 1"
+weight = 1.0
+
+[[metric]]
+id = "age_days"
+fact = "listed_at"
+agg = "days_since"
+warn = "< 90"
+weight = 1.0
+unit = "d"
+label = "days since listing"
+
+[[metric]]
+id = "github_linked"
+fact = "github"
+warn = "is none"
+weight = 1.0
+label = "public repository"
+
+[[metric]]
+id = "ath_change"
+fact = "ath_change"
+warn = "< -80"
+weight = 0.5
+unit = "%"
+label = "drawdown from all-time high"

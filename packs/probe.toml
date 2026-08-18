@@ -1,0 +1,242 @@
+# Latency probes for AI video vendors.
+#
+# This pack MEASURES rather than reads. Each source submits a real generation job and
+# times it to completion, which spends the vendor's credits — so every probe is
+# `auth_required` and `depth = "deep"`, and the pack is never auto-detected. You have to
+# ask for it:
+#
+#     pilotage research latency --pack probe --depth deep
+#
+# One run probes every vendor whose key is set and reports the rest as degraded, so the
+# output is a latency comparison in a single table.
+#
+# Account-specific ids come from the environment via `{env.NAME}`, so nobody has to edit
+# this file. Defaults are the ids used in each vendor's own documentation examples and
+# may not be valid on your account — set the variables.
+#
+#     HEYGEN_API_KEY, HEYGEN_AVATAR_ID, HEYGEN_VOICE_ID
+#     SYNTHESIA_API_KEY, SYNTHESIA_AVATAR_ID
+#     DID_API_KEY, DID_SOURCE_URL
+#     TAVUS_API_KEY, TAVUS_REPLICA_ID
+#
+# The probe TTL is 1d: a latency measurement is not free to repeat, so a same-day rerun
+# reuses it. Force a fresh measurement with --no-cache.
+
+name = "probe"
+description = "Timed generation probes against AI video vendor APIs (spends vendor credits)"
+detect = ["probe:{name}", "latency"]
+tolerance = 0.5
+
+[vars]
+script = "Pilotage latency probe."
+
+# ---------------------------------------------------------------------------
+# HeyGen — X-Api-Key, v2 submit, v1 status
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "heygen"
+kind = "probe"
+url = "https://api.heygen.com/v2/video/generate"
+method = "POST"
+ttl = "1d"
+depth = "deep"
+weight = 1.0
+optional = true
+auth_env = "HEYGEN_API_KEY"
+auth_header = "X-Api-Key"
+auth_format = "{}"
+auth_required = true
+body = '''
+{"video_inputs":[{"character":{"type":"avatar","avatar_id":"{env.HEYGEN_AVATAR_ID}","avatar_style":"normal"},"voice":{"type":"text","input_text":"{script}","voice_id":"{env.HEYGEN_VOICE_ID}"}}],"dimension":{"width":1280,"height":720}}
+'''
+[source.poll]
+url = "https://api.heygen.com/v1/video_status.get?video_id={id}"
+id_path = ".data.video_id"
+status_path = ".data.status"
+done = ["completed"]
+failed = ["failed"]
+interval = "5s"
+timeout = "6m"
+[source.map]
+heygen_latency_s = ".probe.latency_s"
+heygen_ok = ".probe.ok"
+heygen_status = ".probe.status"
+heygen_polls = ".probe.polls"
+heygen_submit_ms = ".probe.submit_ms"
+
+# ---------------------------------------------------------------------------
+# Synthesia — bare Authorization header, v2
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "synthesia"
+kind = "probe"
+url = "https://api.synthesia.io/v2/videos"
+method = "POST"
+ttl = "1d"
+depth = "deep"
+weight = 1.0
+optional = true
+auth_env = "SYNTHESIA_API_KEY"
+auth_header = "Authorization"
+auth_format = "{}"
+auth_required = true
+body = '''
+{"title":"pilotage latency probe","visibility":"private","input":[{"scriptText":"{script}","avatar":"{env.SYNTHESIA_AVATAR_ID}","background":"green_screen"}]}
+'''
+[source.poll]
+url = "https://api.synthesia.io/v2/videos/{id}"
+id_path = ".id"
+status_path = ".status"
+done = ["complete"]
+failed = ["failed", "rejected"]
+interval = "10s"
+timeout = "10m"
+[source.map]
+synthesia_latency_s = ".probe.latency_s"
+synthesia_ok = ".probe.ok"
+synthesia_status = ".probe.status"
+synthesia_polls = ".probe.polls"
+synthesia_submit_ms = ".probe.submit_ms"
+
+# ---------------------------------------------------------------------------
+# D-ID — Basic auth, /talks
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "d_id"
+kind = "probe"
+url = "https://api.d-id.com/talks"
+method = "POST"
+ttl = "1d"
+depth = "deep"
+weight = 1.0
+optional = true
+auth_env = "DID_API_KEY"
+auth_header = "Authorization"
+auth_format = "Basic {}"
+auth_required = true
+body = '''
+{"source_url":"{env.DID_SOURCE_URL}","script":{"type":"text","input":"{script}"}}
+'''
+[source.poll]
+url = "https://api.d-id.com/talks/{id}"
+id_path = ".id"
+status_path = ".status"
+done = ["done"]
+failed = ["error", "rejected"]
+interval = "3s"
+timeout = "5m"
+[source.map]
+d_id_latency_s = ".probe.latency_s"
+d_id_ok = ".probe.ok"
+d_id_status = ".probe.status"
+d_id_polls = ".probe.polls"
+d_id_submit_ms = ".probe.submit_ms"
+
+# ---------------------------------------------------------------------------
+# Tavus — x-api-key, v2
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "tavus"
+kind = "probe"
+url = "https://tavusapi.com/v2/videos"
+method = "POST"
+ttl = "1d"
+depth = "deep"
+weight = 1.0
+optional = true
+auth_env = "TAVUS_API_KEY"
+auth_header = "x-api-key"
+auth_format = "{}"
+auth_required = true
+body = '''
+{"replica_id":"{env.TAVUS_REPLICA_ID}","script":"{script}","video_name":"pilotage latency probe"}
+'''
+[source.poll]
+url = "https://tavusapi.com/v2/videos/{id}"
+id_path = ".video_id"
+status_path = ".status"
+done = ["ready", "completed"]
+failed = ["error", "failed"]
+interval = "5s"
+timeout = "8m"
+[source.map]
+tavus_latency_s = ".probe.latency_s"
+tavus_ok = ".probe.ok"
+tavus_status = ".probe.status"
+tavus_polls = ".probe.polls"
+tavus_submit_ms = ".probe.submit_ms"
+
+# ---------------------------------------------------------------------------
+# Metrics
+#
+# Thresholds are what a product team would care about for a short clip: under a minute
+# is comfortable, over three minutes changes what you can build on top.
+# ---------------------------------------------------------------------------
+
+[[metric]]
+id = "heygen_latency"
+fact = "heygen_latency_s"
+warn = "> 60"
+fail = "> 180"
+weight = 3.0
+unit = "s"
+label = "HeyGen generation latency"
+
+[[metric]]
+id = "heygen_ok"
+fact = "heygen_ok"
+fail = "== 0"
+weight = 2.0
+label = "HeyGen probe completed"
+
+[[metric]]
+id = "synthesia_latency"
+fact = "synthesia_latency_s"
+warn = "> 60"
+fail = "> 180"
+weight = 3.0
+unit = "s"
+label = "Synthesia generation latency"
+
+[[metric]]
+id = "synthesia_ok"
+fact = "synthesia_ok"
+fail = "== 0"
+weight = 2.0
+label = "Synthesia probe completed"
+
+[[metric]]
+id = "d_id_latency"
+fact = "d_id_latency_s"
+warn = "> 60"
+fail = "> 180"
+weight = 3.0
+unit = "s"
+label = "D-ID generation latency"
+
+[[metric]]
+id = "d_id_ok"
+fact = "d_id_ok"
+fail = "== 0"
+weight = 2.0
+label = "D-ID probe completed"
+
+[[metric]]
+id = "tavus_latency"
+fact = "tavus_latency_s"
+warn = "> 60"
+fail = "> 180"
+weight = 3.0
+unit = "s"
+label = "Tavus generation latency"
+
+[[metric]]
+id = "tavus_ok"
+fact = "tavus_ok"
+fail = "== 0"
+weight = 2.0
+label = "Tavus probe completed"
