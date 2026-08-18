@@ -60,7 +60,11 @@ latest_version() {
     # works without a token and is not subject to the API rate limit.
     url="https://github.com/$REPO/releases/latest"
     tag="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$url" 2>/dev/null | sed 's#.*/tag/##')"
-    [ -n "$tag" ] && [ "$tag" != "$url" ] || err "could not determine the latest version; set PILOTAGE_VERSION"
+    # An empty tag means the request failed; an unchanged URL means it did not redirect,
+    # which is what happens when the repository has no releases yet.
+    if [ -z "$tag" ] || [ "$tag" = "$url" ]; then
+        err "could not determine the latest version; set PILOTAGE_VERSION"
+    fi
     printf '%s' "$tag"
 }
 

@@ -80,6 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shellcheck
-        run: shellcheck install.sh
+        # Severity `style` is the strictest level, so CI cannot be laxer than a local run.
+        run: shellcheck -S style install.sh
       - name: Dry run resolves a target triple
         run: sh install.sh --dry-run
